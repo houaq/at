@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tarm/goserial"
-	"github.com/xlab/at/pdu"
-	"github.com/xlab/at/sms"
+	serial "github.com/tarm/goserial"
+	"github.com/houaq/at/pdu"
+	"github.com/houaq/at/sms"
 )
 
 // BaudRate defines the default speed of serial connection.
@@ -19,7 +19,7 @@ const BaudRate = 115200
 const Timeout = time.Minute
 
 // <CR><LF> sequence.
-const Sep = "\r\n"
+const Sep = "\r"
 
 // Ctrl+Z code.
 const Sub = string(0x1A)
@@ -54,6 +54,9 @@ type Device struct {
 	CommandPort string
 	// CommandPort is the path or name of notification serial port.
 	NotifyPort string
+	// BaudRate is baudrate
+	BaudRate int
+
 	// State holds the device state.
 	State *DeviceState
 	// Commands is a profile that provides implementation of Init and the other commands.
@@ -138,9 +141,6 @@ func (d *Device) sanityCheck(initialized bool) error {
 	if d.cmdPort == nil {
 		return ErrClosed
 	}
-	if d.notifyPort == nil {
-		return ErrClosed
-	}
 	if initialized {
 		if d.Commands == nil {
 			return ErrNotInitialized
@@ -177,7 +177,7 @@ func (d *Device) Send(req string) (reply string, err error) {
 
 	var line string
 	buf := bufio.NewReader(d.cmdPort)
-	if line, err = buf.ReadString('\r'); err != nil {
+	if line, err = buf.ReadString('\r'); err != nil && len(line) == 0 {
 		return "", ErrWriteFailed
 	}
 	text := strings.TrimSpace(line)
@@ -363,16 +363,20 @@ func (d *Device) handleReport(str string) (err error) {
 // Open is used to open serial ports of the device. This should be used first.
 // The method returns error if open was not succeed, i.e. if device is absent.
 func (d *Device) Open() (err error) {
+	if d.BaudRate == 0 {
+		d.BaudRate = BaudRate
+	}
 	if d.cmdPort, err = serial.OpenPort(&serial.Config{
-		Name: d.CommandPort,
-		Baud: BaudRate,
+		Name:        d.CommandPort,
+		Baud:        d.BaudRate,
+		ReadTimeout: time.Second,
 	}); err != nil {
 		return
 	}
 	if len(d.NotifyPort) > 0 && d.NotifyPort != d.CommandPort {
 		if d.notifyPort, err = serial.OpenPort(&serial.Config{
 			Name: d.NotifyPort,
-			Baud: BaudRate,
+			Baud: d.BaudRate,
 		}); err != nil {
 			return
 		}

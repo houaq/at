@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/xlab/at/pdu"
-	"github.com/xlab/at/sms"
-	"github.com/xlab/at/util"
+	"github.com/houaq/at/pdu"
+	"github.com/houaq/at/sms"
+	"github.com/houaq/at/util"
 )
 
 // DeviceProfile hides the device-specific implementation
@@ -43,6 +43,81 @@ func DeviceE173() DeviceProfile {
 // in any other custom implementation of the DeviceProfile interface.
 type DefaultProfile struct {
 	dev *Device
+}
+
+// WavecomProfile defines AT commands for Wavecom modem
+type WavecomProfile struct {
+	DefaultProfile
+}
+
+// SYSINFO gets system info
+func (p *WavecomProfile) SYSINFO() (info *SystemInfoReport, err error) {
+	// Fake sysinfo:
+	//	2 Valid service
+	//	3 PS+CS service
+	//	0 Non roaming state
+	//	3 GSM/GPRS mode
+	//	1 Valid USIM card state
+	//	Reserved
+	//	1: GSM mode
+	reply, err := p.dev.Send(`AT+CPIN?`)
+	if err == nil && strings.Contains(reply, "READY") {
+		reply = "^SYSINFO:2,3,0,3,1,,1"
+	} else {
+		reply = "^SYSINFO:0,0,0,0,0,,0"
+	}
+	info = new(SystemInfoReport)
+	err = info.Parse(strings.TrimPrefix(reply, `^SYSINFO:`))
+	return
+}
+
+// OperatorName sends AT+COPS? to the device and gets the operator's name.
+func (p *WavecomProfile) OperatorName() (str string, err error) {
+	result, err := p.dev.Send(`AT+COPS?`)
+	fields := strings.Split(strings.TrimPrefix(result, `+COPS: `), ",")
+	if len(fields) < 3 {
+		err = ErrParseReport
+		return
+	}
+	str = strings.TrimLeft(strings.TrimRight(fields[2], `"`), `"`)
+	return
+}
+
+// SYSCFG does nothing
+func (p *WavecomProfile) SYSCFG(roaming, cellular bool) (err error) {
+	return nil
+}
+
+// Init invokes a set of methods that will make the initial setup of the modem.
+func (p *WavecomProfile) Init(d *Device) (err error) {
+	p.dev = d
+	p.dev.Send(NoopCmd) // kinda flush
+
+	var info *SystemInfoReport
+	if info, err = p.SYSINFO(); err != nil {
+		return errors.New("at init: unable to read system info")
+	}
+	p.dev.State = &DeviceState{
+		ServiceState:  info.ServiceState,
+		ServiceDomain: info.ServiceDomain,
+		RoamingState:  info.RoamingState,
+		SystemMode:    info.SystemMode,
+		SystemSubmode: info.SystemSubmode,
+		SimState:      info.SimState,
+	}
+	if p.dev.State.OperatorName, err = p.OperatorName(); err != nil {
+		return errors.New("at init: unable to read operator's name")
+	}
+	if p.dev.State.ModelName, err = p.ModelName(); err != nil {
+		return errors.New("at init: unable to read modem's model name")
+	}
+	if p.dev.State.IMEI, err = p.IMEI(); err != nil {
+		return errors.New("at init: unable to read modem's IMEI code")
+	}
+	if err = p.CMGF(false); err != nil {
+		return errors.New("at init: unable to switch message format to PDU")
+	}
+	return nil
 }
 
 // Init invokes a set of methods that will make the initial setup of the modem.
